@@ -12,16 +12,12 @@ class RedditScraper:
         self.csv_file = csv_file
         self.subreddits = subreddits or ["laptop"]
 
-    # ====================== UNIQUE ID GEN ======================
 
     def generate_unique_id(self, text):
         return hashlib.md5(text.encode()).hexdigest()[:12]
 
-    # ====================== SCRAPE A SUBREDDIT ======================
 
     def scrape_subreddit(self, subreddit):
-        print(f"\n🔍 Scraping r/{subreddit} ...")
-
         url = f"https://www.reddit.com/r/{subreddit}/.rss"
         headers = {
             "User-Agent": (
@@ -75,10 +71,8 @@ class RedditScraper:
                 "unique_id": unique_id
             })
 
-        print(f"✅ Found {len(posts)} posts in r/{subreddit}")
         return posts
 
-    # ====================== SCRAPE ALL TOPICS ======================
 
     def scrape_all(self):
         combined = []
@@ -86,10 +80,8 @@ class RedditScraper:
             combined.extend(self.scrape_subreddit(sub))
         return combined
 
-    # ====================== GET EXISTING UNIQUE IDs ======================
 
     def get_existing_data(self):
-        """Read existing CSV and return set of unique IDs + all rows"""
         existing_ids = set()
         existing_rows = []
 
@@ -108,10 +100,8 @@ class RedditScraper:
 
         return existing_ids, existing_rows
 
-    # ====================== SAVE POSTS TO CSV ======================
 
     def save_posts_to_csv(self, new_posts):
-        """Append only new posts to CSV"""
         existing_ids, existing_rows = self.get_existing_data()
 
         # Filter out duplicates
@@ -133,7 +123,6 @@ class RedditScraper:
                 if not file_exists:
                     writer.writeheader()
 
-                # Write new posts
                 for p in posts_to_add:
                     writer.writerow({
                         "Topic": p["topic"],
@@ -149,19 +138,14 @@ class RedditScraper:
         except Exception as e:
             print(f"❌ Error writing to CSV: {e}")
 
-    # ====================== REMOVE DUPLICATES ======================
 
     def clean_duplicates(self):
-        """Remove duplicate rows based on Unique_ID"""
-        print("\n🧹 Checking for duplicates...")
-
         if not os.path.exists(self.csv_file):
             print("CSV file doesn't exist yet.")
             return
 
         existing_ids, existing_rows = self.get_existing_data()
 
-        # Keep only first occurrence of each unique_id
         seen = set()
         unique_rows = []
 
@@ -174,7 +158,6 @@ class RedditScraper:
         duplicates_removed = len(existing_rows) - len(unique_rows)
 
         if duplicates_removed > 0:
-            # Rewrite CSV with unique rows only
             try:
                 with open(self.csv_file, 'w', encoding='utf-8', newline='') as f:
                     fieldnames = ["Topic", "Title", "Link", "Published_Time", "Unique_ID"]
@@ -188,7 +171,6 @@ class RedditScraper:
         else:
             print("✅ No duplicates found")
 
-    # ====================== RUN FULL PIPELINE ======================
 
     def run(self):
         print("\n🚀 Starting Reddit → CSV Sync...")
@@ -206,12 +188,12 @@ class RedditScraper:
         print("\n✅ Sync completed successfully!\n")
 
 
-# ====================== MAIN EXECUTION ======================
 if __name__ == "__main__":
     scraper = RedditScraper(
         csv_file="posts.csv",
-        subreddits=["laptop", "buildapc", "techsupport"]
+        subreddits = ["SuggestALaptop","LaptopDeals","laptops","buildapcforme","studentlaptops","techsupport"]
     )
     
     scraper.run()
+
 
