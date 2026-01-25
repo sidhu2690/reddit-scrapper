@@ -2,7 +2,7 @@ name: Daily Filter
 
 on:
   schedule:
-    - cron: "* * * * *"   # Runs daily at 9:00 AM IST
+    - cron: "30 3 * * *"   
   workflow_dispatch:
 
 jobs:
