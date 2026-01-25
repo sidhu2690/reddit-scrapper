@@ -56,11 +56,11 @@ class AmazonScraper:
             # Scrape page 1
             laptops.extend(await self._scrape_page(self.URL, 1))
             
-            # Scrape page 2 if needed
+            # If page 1 doesn't have enough, don't save
             if len(laptops) < max_results:
-                await asyncio.sleep(random.uniform(2, 4))
-                page2_url = f"{self.URL}?pg=2"
-                laptops.extend(await self._scrape_page(page2_url, 2))
+                print(f"⚠️ Page 1 only has {len(laptops)} laptops, need {max_results}. Not saving.")
+                await self.browser.close()
+                return pd.DataFrame()
             
             await self.browser.close()
         
