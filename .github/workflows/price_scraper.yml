@@ -48,7 +48,18 @@ jobs:
         run: python -m playwright install chromium
 
       - name: Run scraper
+        env:
+          SCRAPER_API_KEY: ${{ secrets.SCRAPER_API_KEY }}
         run: python UnifiedPriceScraper.py
+
+      - name: Upload debug screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots
+          path: debug_screenshots/
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Commit and push changes
         run: |
