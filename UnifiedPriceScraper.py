@@ -23,12 +23,20 @@ class ProductComparison:
 class UnifiedScraper:
     def __init__(self, debug_mode: bool = False):
         self.browser = None
-        self.page = None
+        self.context = None
         self.debug_mode = debug_mode
         self.debug_dir = "debug_screenshots"
         
         if self.debug_mode:
             os.makedirs(self.debug_dir, exist_ok=True)
+        
+        # Rotate user agents
+        self.user_agents = [
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:125.0) Gecko/20100101 Firefox/125.0"
+        ]
 
     async def run(self, input_csv: str) -> pd.DataFrame:
         df_input = pd.read_csv(input_csv)
@@ -47,27 +55,17 @@ class UnifiedScraper:
                     ebazaar_link=row.get('ebazaar_link', '')
                 )
                 
-                # Scrape Amazon
+                # Scrape Amazon with fresh page
                 if pd.notna(row.get('amazon_link')) and str(row['amazon_link']).strip():
-                    mrp, selling = await self._scrape_with_retry(
-                        self._scrape_amazon, 
-                        row['amazon_link'],
-                        idx,
-                        "amazon"
-                    )
+                    mrp, selling = await self._scrape_amazon_with_new_page(row['amazon_link'], idx)
                     product.amazon_mrp = mrp
                     product.amazon_selling_price = selling
                 
-                await self._random_delay(2000, 3000)
+                await asyncio.sleep(random.uniform(2, 4))
                 
                 # Scrape eBazaar
                 if pd.notna(row.get('ebazaar_link')) and str(row['ebazaar_link']).strip():
-                    mrp, selling = await self._scrape_with_retry(
-                        self._scrape_ebazaar, 
-                        row['ebazaar_link'],
-                        idx,
-                        "ebazaar"
-                    )
+                    mrp, selling = await self._scrape_ebazaar_with_new_page(row['ebazaar_link'], idx)
                     product.ebazaar_mrp = mrp
                     product.ebazaar_selling_price = selling
                 
@@ -76,7 +74,7 @@ class UnifiedScraper:
                       f"MRP(E)={product.ebazaar_mrp}, SP(E)={product.ebazaar_selling_price}")
                 
                 if idx < total - 1:
-                    await self._random_delay(3000, 5000)
+                    await asyncio.sleep(random.uniform(3, 6))
             
             await self.browser.close()
         
@@ -90,150 +88,185 @@ class UnifiedScraper:
                 '--disable-dev-shm-usage',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-infobars',
-                '--window-size=1920,1080',
                 '--disable-extensions',
-                '--disable-gpu'
+                '--disable-gpu',
+                '--no-first-run',
+                '--no-default-browser-check',
+                '--ignore-certificate-errors',
             ]
         )
-        
+
+    async def _create_stealth_context(self):
+        """Create a new context with stealth settings"""
         context = await self.browser.new_context(
             viewport={"width": 1920, "height": 1080},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            user_agent=random.choice(self.user_agents),
             locale='en-US',
             timezone_id='America/New_York',
-            java_script_enabled=True
+            color_scheme='light',
+            device_scale_factor=1,
+            has_touch=False,
+            is_mobile=False,
+            java_script_enabled=True,
+            permissions=['geolocation'],
+            geolocation={'latitude': 40.7128, 'longitude': -74.0060},
+            extra_http_headers={
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept-Language': 'en-US,en;q=0.9',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
+                'Sec-Fetch-Dest': 'document',
+                'Sec-Fetch-Mode': 'navigate',
+                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-User': '?1',
+                'Cache-Control': 'max-age=0',
+            }
         )
         
-        # Remove automation detection
+        # Comprehensive stealth script
         await context.add_init_script('''
-            // Remove webdriver flag
+            // Webdriver
             Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+            delete navigator.__proto__.webdriver;
             
-            // Mock plugins
+            // Plugins
             Object.defineProperty(navigator, 'plugins', {
-                get: () => [1, 2, 3, 4, 5]
+                get: () => {
+                    const plugins = [
+                        { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer' },
+                        { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai' },
+                        { name: 'Native Client', filename: 'internal-nacl-plugin' }
+                    ];
+                    plugins.item = (index) => plugins[index];
+                    plugins.namedItem = (name) => plugins.find(p => p.name === name);
+                    plugins.refresh = () => {};
+                    return plugins;
+                }
             });
             
-            // Mock languages
-            Object.defineProperty(navigator, 'languages', {
-                get: () => ['en-US', 'en']
-            });
+            // Languages
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            Object.defineProperty(navigator, 'language', { get: () => 'en-US' });
             
-            // Remove chrome automation flags
-            window.chrome = { runtime: {} };
+            // Platform
+            Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+            
+            // Hardware concurrency
+            Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+            
+            // Device memory
+            Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+            
+            // Chrome
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
+            
+            // Permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            // WebGL Vendor
+            const getParameter = WebGLRenderingContext.prototype.getParameter;
+            WebGLRenderingContext.prototype.getParameter = function(parameter) {
+                if (parameter === 37445) return 'Intel Inc.';
+                if (parameter === 37446) return 'Intel Iris OpenGL Engine';
+                return getParameter.call(this, parameter);
+            };
+            
+            // Console
+            const originalConsole = window.console;
+            window.console = {
+                ...originalConsole,
+                debug: () => {},
+            };
         ''')
         
-        self.page = await context.new_page()
-        
-        # Block unnecessary resources to speed up loading
-        await self.page.route("**/*.{png,jpg,jpeg,gif,svg,ico,woff,woff2}", lambda route: route.abort())
+        return context
 
-    async def _random_delay(self, min_ms: int, max_ms: int):
-        await self.page.wait_for_timeout(random.randint(min_ms, max_ms))
-
-    async def _scrape_with_retry(self, scrape_func, url: str, idx: int, source: str, retries: int = 3) -> tuple:
-        for attempt in range(retries):
-            try:
-                result = await scrape_func(url)
-                
-                # Check if we got valid data
-                if result[1] != "N/A" and result[1] != "Error":
-                    return result
-                
-                if attempt < retries - 1:
-                    print(f"  ⟳ {source.capitalize()} retry {attempt + 2}/{retries}...")
-                    await self._random_delay(3000, 5000)
-                    
-                    # Refresh page on retry
-                    await self.page.reload(wait_until="networkidle", timeout=30000)
-                    await self._random_delay(2000, 3000)
-                    
-            except Exception as e:
-                print(f"  ✗ {source.capitalize()} attempt {attempt + 1} failed: {str(e)[:50]}")
-                if attempt < retries - 1:
-                    await self._random_delay(3000, 5000)
+    async def _scrape_amazon_with_new_page(self, url: str, idx: int) -> tuple:
+        """Scrape Amazon with a fresh context for each request"""
+        context = await self._create_stealth_context()
+        page = await context.new_page()
         
-        # Save debug info on final failure
-        if self.debug_mode and (result[0] == "Error" or result[1] == "N/A"):
-            await self._save_debug(idx, source)
-        
-        return result
-
-    async def _save_debug(self, idx: int, source: str):
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            await self.page.screenshot(path=f"{self.debug_dir}/{source}_{idx}_{timestamp}.png", full_page=True)
-            html = await self.page.content()
-            with open(f"{self.debug_dir}/{source}_{idx}_{timestamp}.html", "w", encoding="utf-8") as f:
-                f.write(html)
-            print(f"  📸 Debug saved for {source} #{idx}")
-        except Exception as e:
-            print(f"  Failed to save debug: {e}")
-
-    async def _scrape_amazon(self, url: str) -> tuple:
-        try:
-            # Navigate with longer timeout
-            response = await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            # First visit Amazon homepage to get cookies
+            print("  → Visiting Amazon homepage first...")
+            await page.goto('https://www.amazon.com', wait_until='domcontentloaded', timeout=30000)
+            await asyncio.sleep(random.uniform(2, 4))
             
-            # Check for blocked/captcha
+            # Now visit the product page
+            print(f"  → Loading product page...")
+            response = await page.goto(url, wait_until='domcontentloaded', timeout=60000)
+            
+            # Check for blocks
             if response and response.status >= 400:
                 print(f"  ⚠ Amazon returned status {response.status}")
+                if self.debug_mode:
+                    await self._save_debug(page, idx, "amazon")
                 return "Blocked", "Blocked"
             
-            # Wait for page to stabilize
-            await self._random_delay(2000, 3000)
+            await asyncio.sleep(random.uniform(3, 5))
             
-            # Try to wait for price elements
+            # Check for CAPTCHA
+            page_content = await page.content()
+            if 'captcha' in page_content.lower() or 'robot' in page_content.lower():
+                print("  ⚠ CAPTCHA detected!")
+                if self.debug_mode:
+                    await self._save_debug(page, idx, "amazon_captcha")
+                return "CAPTCHA", "CAPTCHA"
+            
+            # Human-like scrolling
+            await page.evaluate('window.scrollBy(0, 300)')
+            await asyncio.sleep(random.uniform(0.5, 1))
+            await page.evaluate('window.scrollBy(0, 200)')
+            await asyncio.sleep(random.uniform(0.5, 1))
+            
+            # Wait for price elements
             try:
-                await self.page.wait_for_selector(
-                    '.a-price, #priceblock_ourprice, #priceblock_dealprice, '
-                    '#corePrice_feature_div, .a-price-whole, #apex_desktop',
+                await page.wait_for_selector(
+                    '#corePrice_feature_div, #priceblock_ourprice, .a-price, #apex_desktop',
                     timeout=10000
                 )
             except:
-                print("  ⚠ Price selector timeout, continuing anyway...")
+                print("  ⚠ Price element not found in DOM")
             
-            await self._random_delay(1000, 2000)
+            await asyncio.sleep(1)
             
-            # Scroll to trigger lazy loading
-            await self.page.evaluate('window.scrollBy(0, 500)')
-            await self._random_delay(500, 1000)
-            
-            data = await self.page.evaluate('''() => {
+            # Extract prices
+            data = await page.evaluate('''() => {
                 let sellingPrice = '';
                 let mrp = '';
                 
-                // ============ SELLING PRICE SELECTORS ============
+                // SELLING PRICE - Try multiple methods
                 const sellingSelectors = [
-                    // Core price display (most common)
                     '#corePrice_feature_div .a-price:not([data-a-strike="true"]) .a-offscreen',
                     '.priceToPay .a-offscreen',
+                    '.a-price.aok-align-center .a-offscreen',
                     '#apex_offerDisplay_desktop .a-offscreen',
-                    
-                    // Standard price selectors
-                    '.a-price:not(.a-text-price) .a-offscreen',
+                    '.a-price.reinventPricePriceToPayMargin .a-offscreen',
                     '#priceblock_ourprice',
                     '#priceblock_dealprice',
                     '#priceblock_saleprice',
-                    
-                    // Deal prices
-                    '.apexPriceToPay .a-offscreen',
-                    '#corePrice_desktop .a-offscreen',
-                    '.reinventPricePriceToPayMargin .a-offscreen',
-                    
-                    // Fallback selectors
-                    '.a-price-whole',
-                    'span[data-a-color="price"] .a-offscreen',
-                    '.a-color-price'
+                    '.a-price .a-offscreen',
+                    'span.a-price-whole'
                 ];
                 
                 for (const selector of sellingSelectors) {
-                    const elements = document.querySelectorAll(selector);
-                    for (const el of elements) {
-                        const text = el.textContent?.trim();
-                        if (text && (text.includes('$') || text.includes('₹') || text.includes('£') || text.includes('€'))) {
-                            // Avoid MRP values (usually crossed out)
-                            const parent = el.closest('.a-text-price, [data-a-strike="true"]');
+                    const els = document.querySelectorAll(selector);
+                    for (const el of els) {
+                        const text = el?.textContent?.trim();
+                        if (text && /[$₹£€]/.test(text)) {
+                            const parent = el.closest('[data-a-strike="true"], .a-text-price');
                             if (!parent) {
                                 sellingPrice = text;
                                 break;
@@ -243,40 +276,38 @@ class UnifiedScraper:
                     if (sellingPrice) break;
                 }
                 
-                // ============ MRP SELECTORS ============
+                // Build price from parts if needed
+                if (!sellingPrice) {
+                    const whole = document.querySelector('.a-price-whole');
+                    const fraction = document.querySelector('.a-price-fraction');
+                    if (whole) {
+                        sellingPrice = '$' + whole.textContent.replace(/[^0-9]/g, '');
+                        if (fraction) {
+                            sellingPrice += '.' + fraction.textContent.trim();
+                        }
+                    }
+                }
+                
+                // MRP PRICE
                 const mrpSelectors = [
-                    // Crossed out prices
-                    '.a-text-price:not(.apexPriceToPay) .a-offscreen',
+                    '.a-text-price .a-offscreen',
                     '.basisPrice .a-offscreen',
                     '[data-a-strike="true"] .a-offscreen',
-                    
-                    // List price
                     '#priceblock_listprice',
                     '#listPrice',
-                    '.a-text-strike',
-                    
-                    // Other MRP indicators
-                    '.priceBlockStrikePriceString',
-                    'span[data-a-strike="true"]',
-                    '.a-price[data-a-strike="true"] .a-offscreen'
+                    '.a-text-strike'
                 ];
                 
                 for (const selector of mrpSelectors) {
-                    const elements = document.querySelectorAll(selector);
-                    for (const el of elements) {
-                        const text = el.textContent?.trim();
-                        if (text && (text.includes('$') || text.includes('₹') || text.includes('£') || text.includes('€'))) {
-                            mrp = text;
-                            break;
-                        }
+                    const el = document.querySelector(selector);
+                    const text = el?.textContent?.trim();
+                    if (text && /[$₹£€]/.test(text)) {
+                        mrp = text;
+                        break;
                     }
-                    if (mrp) break;
                 }
                 
-                // If no MRP found, it might be same as selling price (no discount)
-                if (!mrp && sellingPrice) {
-                    mrp = sellingPrice;
-                }
+                if (!mrp && sellingPrice) mrp = sellingPrice;
                 
                 return { mrp, sellingPrice };
             }''')
@@ -284,117 +315,82 @@ class UnifiedScraper:
             mrp = data.get('mrp', '').strip() or "N/A"
             selling = data.get('sellingPrice', '').strip() or "N/A"
             
+            if selling == "N/A" and self.debug_mode:
+                await self._save_debug(page, idx, "amazon")
+            
             print(f"  Amazon: MRP={mrp}, Selling={selling}")
             return mrp, selling
             
         except Exception as e:
             print(f"  ✗ Amazon error: {str(e)[:80]}")
+            if self.debug_mode:
+                try:
+                    await self._save_debug(page, idx, "amazon_error")
+                except:
+                    pass
             return "Error", "Error"
+        finally:
+            await context.close()
 
-    async def _scrape_ebazaar(self, url: str) -> tuple:
+    async def _scrape_ebazaar_with_new_page(self, url: str, idx: int) -> tuple:
+        """Scrape eBazaar with a fresh context"""
+        context = await self._create_stealth_context()
+        page = await context.new_page()
+        
         try:
-            response = await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            response = await page.goto(url, wait_until='domcontentloaded', timeout=60000)
             
             if response and response.status >= 400:
                 print(f"  ⚠ eBazaar returned status {response.status}")
                 return "Blocked", "Blocked"
             
-            await self._random_delay(2000, 3000)
+            await asyncio.sleep(random.uniform(2, 4))
             
-            # Wait for price container
             try:
-                await self.page.wait_for_selector(
-                    '.product-info-price, .price-box, .product-info-main, .price',
+                await page.wait_for_selector(
+                    '.product-info-price, .price-box, .price',
                     timeout=10000
                 )
             except:
-                print("  ⚠ eBazaar price selector timeout...")
+                pass
             
-            await self._random_delay(1000, 2000)
+            await asyncio.sleep(1)
             
-            data = await self.page.evaluate('''() => {
+            data = await page.evaluate('''() => {
                 let sellingPrice = '';
                 let mrp = '';
                 
-                // ============ TRY DATA ATTRIBUTES FIRST ============
+                // Try data attributes first
                 const finalPriceEl = document.querySelector('[data-price-type="finalPrice"]');
                 if (finalPriceEl) {
                     const amount = finalPriceEl.getAttribute('data-price-amount');
-                    if (amount) {
-                        sellingPrice = '$' + parseFloat(amount).toFixed(2);
-                    }
+                    if (amount) sellingPrice = '$' + parseFloat(amount).toFixed(2);
                 }
                 
                 const oldPriceEl = document.querySelector('[data-price-type="oldPrice"]');
                 if (oldPriceEl) {
                     const amount = oldPriceEl.getAttribute('data-price-amount');
-                    if (amount) {
-                        mrp = '$' + parseFloat(amount).toFixed(2);
-                    }
+                    if (amount) mrp = '$' + parseFloat(amount).toFixed(2);
                 }
                 
-                // ============ FALLBACK: TEXT PARSING ============
+                // Fallback: parse text
                 if (!sellingPrice || !mrp) {
-                    const priceContainers = document.querySelectorAll(
-                        '.product-info-price, .price-box, .product-info-main, .price-wrapper'
-                    );
-                    
-                    for (const container of priceContainers) {
+                    const containers = document.querySelectorAll('.product-info-price, .price-box, .product-info-main');
+                    for (const container of containers) {
                         const text = container.innerText;
-                        const priceMatches = text.match(/\\$[\\d,]+\\.?\\d*/g);
-                        
-                        if (priceMatches && priceMatches.length >= 2) {
-                            // Usually: first is selling, second is MRP (crossed out)
-                            const prices = priceMatches.map(p => parseFloat(p.replace(/[$,]/g, '')));
-                            const minPrice = Math.min(...prices);
-                            const maxPrice = Math.max(...prices);
-                            
-                            if (!sellingPrice) sellingPrice = '$' + minPrice.toFixed(2);
-                            if (!mrp) mrp = '$' + maxPrice.toFixed(2);
+                        const prices = text.match(/\\$[\\d,]+\\.?\\d*/g);
+                        if (prices && prices.length >= 2) {
+                            const nums = prices.map(p => parseFloat(p.replace(/[$,]/g, '')));
+                            if (!sellingPrice) sellingPrice = '$' + Math.min(...nums).toFixed(2);
+                            if (!mrp) mrp = '$' + Math.max(...nums).toFixed(2);
                             break;
-                        } else if (priceMatches && priceMatches.length === 1) {
-                            if (!sellingPrice) sellingPrice = priceMatches[0];
+                        } else if (prices && prices.length === 1) {
+                            if (!sellingPrice) sellingPrice = prices[0];
                         }
                     }
                 }
                 
-                // ============ MORE SPECIFIC SELECTORS ============
-                if (!sellingPrice) {
-                    const selectors = [
-                        '.price-wrapper .price',
-                        '.special-price .price',
-                        '.final-price .price',
-                        '.price'
-                    ];
-                    for (const sel of selectors) {
-                        const el = document.querySelector(sel);
-                        if (el && el.textContent.includes('$')) {
-                            sellingPrice = el.textContent.trim();
-                            break;
-                        }
-                    }
-                }
-                
-                if (!mrp) {
-                    const selectors = [
-                        '.old-price .price',
-                        '.regular-price .price',
-                        'del .price',
-                        '.was-price'
-                    ];
-                    for (const sel of selectors) {
-                        const el = document.querySelector(sel);
-                        if (el && el.textContent.includes('$')) {
-                            mrp = el.textContent.trim();
-                            break;
-                        }
-                    }
-                }
-                
-                // If no MRP, assume same as selling (no discount)
-                if (!mrp && sellingPrice) {
-                    mrp = sellingPrice;
-                }
+                if (!mrp && sellingPrice) mrp = sellingPrice;
                 
                 return { mrp, sellingPrice };
             }''')
@@ -408,40 +404,51 @@ class UnifiedScraper:
         except Exception as e:
             print(f"  ✗ eBazaar error: {str(e)[:80]}")
             return "Error", "Error"
+        finally:
+            await context.close()
+
+    async def _save_debug(self, page, idx: int, source: str):
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            await page.screenshot(path=f"{self.debug_dir}/{source}_{idx}_{timestamp}.png", full_page=True)
+            html = await page.content()
+            with open(f"{self.debug_dir}/{source}_{idx}_{timestamp}.html", "w", encoding="utf-8") as f:
+                f.write(html)
+            print(f"  📸 Debug saved: {source}_{idx}_{timestamp}")
+        except Exception as e:
+            print(f"  Failed to save debug: {e}")
 
 
 def main():
-    print("=" * 50)
+    print("=" * 60)
     print("Price Scraper Started")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 50)
+    print("=" * 60)
     
-    # Set debug_mode=True to save screenshots on failures
-    scraper = UnifiedScraper(debug_mode=False)
+    # Enable debug_mode=True to save screenshots when Amazon fails
+    scraper = UnifiedScraper(debug_mode=True)
     
     try:
         df_output = asyncio.run(scraper.run('price/input_links.csv'))
-        
-        # Save output
         df_output.to_csv("price/data.csv", index=False)
         
-        print("\n" + "=" * 50)
+        print("\n" + "=" * 60)
         print(f"✓ Done! Saved {len(df_output)} products to price/data.csv")
         
-        # Summary statistics
-        amazon_success = len(df_output[df_output['amazon_selling_price'].notna() & 
-                                        (df_output['amazon_selling_price'] != 'N/A') & 
-                                        (df_output['amazon_selling_price'] != 'Error')])
-        ebazaar_success = len(df_output[df_output['ebazaar_selling_price'].notna() & 
-                                         (df_output['ebazaar_selling_price'] != 'N/A') & 
-                                         (df_output['ebazaar_selling_price'] != 'Error')])
+        # Stats
+        amazon_ok = len(df_output[(df_output['amazon_selling_price'] != 'N/A') & 
+                                   (df_output['amazon_selling_price'] != 'Error') &
+                                   (df_output['amazon_selling_price'] != 'CAPTCHA') &
+                                   (df_output['amazon_selling_price'] != 'Blocked')])
+        ebazaar_ok = len(df_output[(df_output['ebazaar_selling_price'] != 'N/A') & 
+                                    (df_output['ebazaar_selling_price'] != 'Error')])
         
-        print(f"  Amazon success: {amazon_success}/{len(df_output)}")
-        print(f"  eBazaar success: {ebazaar_success}/{len(df_output)}")
-        print("=" * 50)
+        print(f"  Amazon success:  {amazon_ok}/{len(df_output)}")
+        print(f"  eBazaar success: {ebazaar_ok}/{len(df_output)}")
+        print("=" * 60)
         
     except FileNotFoundError:
-        print("✗ Error: Input file 'price/input_links.csv' not found!")
+        print("✗ Error: 'price/input_links.csv' not found!")
     except Exception as e:
         print(f"✗ Error: {e}")
         raise
