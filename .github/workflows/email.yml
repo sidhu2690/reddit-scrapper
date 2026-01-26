@@ -1,7 +1,7 @@
 name: EB Scraper with Email Notification
 on:
   schedule:
-    - cron: "0 0 */3 * *"  # Runs every hour
+    - cron: "0 0 */3 * *"  
   workflow_dispatch:       # Manual trigger button
 
 jobs:
