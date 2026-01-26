@@ -1,3 +1,5 @@
 playwright==1.41.0
 pandas==2.1.4
 nest-asyncio==1.6.0
+httpx
+beautifulsoup4
