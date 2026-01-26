@@ -1,0 +1,100 @@
+name: EB Scraper with Email Notification
+on:
+  schedule:
+    - cron: "0 * * * *" 
+  workflow_dispatch:       # Manual trigger button
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: write  # Allow pushing changes
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+    
+    - name: Setup Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+    
+    - name: Install dependencies
+      run: pip install -r requirements.txt
+    
+    - name: Run scraper
+      run: python scraper.py
+    
+    - name: Check if data file exists
+      id: check_file
+      run: |
+        if [ -f "data/data.csv" ]; then
+          echo "file_exists=true" >> $GITHUB_OUTPUT
+          echo "Data file found"
+        else
+          echo "file_exists=false" >> $GITHUB_OUTPUT
+          echo "Data file not found"
+        fi
+    
+    - name: Send email with attachment
+      if: steps.check_file.outputs.file_exists == 'true'
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: EB Scraper Data Update - ${{ github.run_number }}
+        to: ${{ secrets.RECIPIENT_EMAIL }}
+        cc: ${{ secrets.CC_EMAIL }}
+        from: EB Scraper Bot
+        body: |
+          Hi,
+          
+          This is an automated email from your EB Scraper workflow.
+          
+          Run Details:
+          - Workflow Run: #${{ github.run_number }}
+          - Date: ${{ github.event.head_commit.timestamp }}
+          - Repository: ${{ github.repository }}
+          
+          Please find the latest scraped data attached.
+          
+          Best regards,
+          EB Scraper Bot
+        attachments: data/data.csv
+        content_type: text/plain
+    
+    - name: Commit and push if changed
+      run: |
+        git config --global user.name "GitHub Actions Bot"
+        git config --global user.email "actions@github.com"
+        git add data/data.csv
+        if git diff --staged --quiet; then
+          echo "No changes to commit"
+        else
+          git commit -m "Update data.csv - $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+          git push
+        fi
+    
+    - name: Notify on failure
+      if: failure()
+      uses: dawidd6/action-send-mail@v3
+      with:
+        server_address: smtp.gmail.com
+        server_port: 587
+        username: ${{ secrets.EMAIL_USERNAME }}
+        password: ${{ secrets.EMAIL_PASSWORD }}
+        subject: ⚠️ EB Scraper Failed - ${{ github.run_number }}
+        to: ${{ secrets.CC_EMAIL }}
+        from: EB Scraper Bot
+        body: |
+          Warning: The EB scraper workflow has failed.
+          
+          Run Details:
+          - Workflow Run: #${{ github.run_number }}
+          - Repository: ${{ github.repository }}
+          - Check the logs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          
+          Please investigate the issue.
