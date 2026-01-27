@@ -3,3 +3,4 @@ joblib
 sentence-transformers
 scikit-learn
 numpy
+requests
