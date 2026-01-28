@@ -308,7 +308,7 @@ class UnifiedScraper:
             print("  ⚠ No API keys available")
             return "No API Key", "No API Key", "N/A"
         
-        max_retries = min(3, len(self.api_keys))
+        max_retries = min(7, len(self.api_keys))
         
         for attempt in range(max_retries):
             result = self._get_next_api_key()
