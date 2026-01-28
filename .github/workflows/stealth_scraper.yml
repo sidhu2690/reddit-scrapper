@@ -1,0 +1,244 @@
+name: Stealth Price Scraper
+
+on:
+  # Manual trigger
+  workflow_dispatch:
+    inputs:
+      debug_mode:
+        description: 'Enable debug mode (saves screenshots)'
+        required: false
+        default: 'true'
+        type: boolean
+      us_only:
+        description: 'Force US IPs only'
+        required: false
+        default: 'true'
+        type: boolean
+      run_stealth_test:
+        description: 'Run stealth detection test first'
+        required: false
+        default: 'false'
+        type: boolean
+
+  # Scheduled runs
+  schedule:
+    # Run daily at 6 AM UTC
+    - cron: '0 6 * * *'
+
+  # Trigger on push to specific branch
+  push:
+    branches:
+      - main
+    paths:
+      - 'price/input_links.csv'
+      - 'stealth_scraper.py'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    env:
+      # ScraperAPI keys (fallback)
+      SCRAPER_API_KEY_1: ${{ secrets.SCRAPER_API_KEY_1 }}
+      SCRAPER_API_KEY_2: ${{ secrets.SCRAPER_API_KEY_2 }}
+      SCRAPER_API_KEY_3: ${{ secrets.SCRAPER_API_KEY_3 }}
+      SCRAPER_API_KEY_4: ${{ secrets.SCRAPER_API_KEY_4 }}
+      SCRAPER_API_KEY_5: ${{ secrets.SCRAPER_API_KEY_5 }}
+      SCRAPER_API_KEY_6: ${{ secrets.SCRAPER_API_KEY_6 }}
+      SCRAPER_API_KEY_7: ${{ secrets.SCRAPER_API_KEY_7 }}
+
+    steps:
+      # ==================== SETUP ====================
+      
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements_new_scraper.txt
+
+      - name: 🎭 Install Playwright browsers
+        run: |
+          playwright install chromium
+          playwright install-deps chromium
+
+      - name: 📁 Create directories
+        run: |
+          mkdir -p price
+          mkdir -p debug_screenshots
+
+      # ==================== VERIFY SETUP ====================
+
+      - name: 🔍 Verify input file exists
+        run: |
+          if [ ! -f "price/input_links.csv" ]; then
+            echo "❌ Error: price/input_links.csv not found!"
+            echo "Creating sample file..."
+            echo "model_name,amazon_link,ebazaar_link" > price/input_links.csv
+            echo "Sample Product,https://www.amazon.com/dp/B09V3KXJPB," >> price/input_links.csv
+          fi
+          echo "📄 Input file contents:"
+          cat price/input_links.csv
+          echo ""
+          echo "📊 Total products: $(tail -n +2 price/input_links.csv | wc -l)"
+
+      - name: 🌐 Check current IP location
+        run: |
+          echo "Checking GitHub Actions runner IP..."
+          curl -s http://ip-api.com/json/ | python -m json.tool
+
+      # ==================== STEALTH TEST (OPTIONAL) ====================
+
+      - name: 🔬 Run stealth detection test
+        if: ${{ github.event.inputs.run_stealth_test == 'true' }}
+        run: |
+          echo "Running stealth detection test..."
+          python stealth_scraper.py --test
+        continue-on-error: true
+
+      - name: 📸 Upload stealth test screenshots
+        if: ${{ github.event.inputs.run_stealth_test == 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: stealth-test-results
+          path: debug_screenshots/
+          retention-days: 7
+        continue-on-error: true
+
+      # ==================== MAIN SCRAPER ====================
+
+      - name: 🥷 Run Stealth Scraper
+        run: |
+          echo "=============================================="
+          echo "🥷 Starting Stealth Price Scraper"
+          echo "=============================================="
+          echo "Debug Mode: ${{ github.event.inputs.debug_mode || 'true' }}"
+          echo "US Only: ${{ github.event.inputs.us_only || 'true' }}"
+          echo "=============================================="
+          python stealth_scraper.py
+        env:
+          DEBUG_MODE: ${{ github.event.inputs.debug_mode || 'true' }}
+          US_ONLY: ${{ github.event.inputs.us_only || 'true' }}
+
+      # ==================== RESULTS ====================
+
+      - name: 📊 Display results summary
+        if: always()
+        run: |
+          echo "=============================================="
+          echo "📊 RESULTS SUMMARY"
+          echo "=============================================="
+          if [ -f "price/data.csv" ]; then
+            echo "✅ Output file created successfully"
+            echo ""
+            echo "📄 Output preview (first 10 rows):"
+            head -n 11 price/data.csv
+            echo ""
+            echo "📈 Statistics:"
+            python << 'EOF'
+          import pandas as pd
+          try:
+              df = pd.read_csv('price/data.csv')
+              print(f"  Total products: {len(df)}")
+              
+              # Amazon stats
+              amazon_ok = len(df[~df['amazon_selling_price'].isin(['N/A', 'Error', 'CAPTCHA', 'Blocked', '', 'No API Key'])])
+              print(f"  Amazon success: {amazon_ok}/{len(df)} ({100*amazon_ok/len(df):.1f}%)")
+              
+              # eBazaar stats
+              ebazaar_ok = len(df[~df['ebazaar_selling_price'].isin(['N/A', 'Error', ''])])
+              print(f"  eBazaar success: {ebazaar_ok}/{len(df)} ({100*ebazaar_ok/len(df):.1f}%)")
+              
+              # Method breakdown
+              print(f"\n  Method breakdown:")
+              method_counts = df['amazon_method'].value_counts()
+              for method, count in method_counts.items():
+                  method_name = {'A': 'Request', 'B': 'Stealth PW', 'C': 'API', 'X': 'Failed'}.get(method, method)
+                  print(f"    {method} ({method_name}): {count}")
+              
+              # IP locations
+              print(f"\n  IP Locations used:")
+              for ip, count in df['amazon_ip_location'].value_counts().items():
+                  print(f"    {ip}: {count}")
+                  
+          except Exception as e:
+              print(f"Error reading results: {e}")
+          EOF
+          else
+            echo "❌ Output file not found!"
+          fi
+
+      # ==================== ARTIFACTS ====================
+
+      - name: 📤 Upload output data
+        uses: actions/upload-artifact@v4
+        with:
+          name: price-data-${{ github.run_number }}
+          path: price/data.csv
+          retention-days: 30
+
+      - name: 📸 Upload debug screenshots
+        if: ${{ github.event.inputs.debug_mode == 'true' || github.event.inputs.debug_mode == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-screenshots-${{ github.run_number }}
+          path: debug_screenshots/
+          retention-days: 7
+        continue-on-error: true
+
+      # ==================== COMMIT RESULTS ====================
+
+      - name: 💾 Commit and push results
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          
+          git add price/data.csv
+          
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "🥷 Update price data (stealth) - $(date +'%Y-%m-%d %H:%M')"
+            git push
+            echo "✅ Results committed and pushed"
+          fi
+
+      # ==================== NOTIFICATIONS ====================
+
+      - name: 📧 Send success notification
+        if: success()
+        run: |
+          echo "✅ Scraping completed successfully!"
+          # Add your notification logic here (Slack, Discord, email, etc.)
+
+      - name: 🚨 Send failure notification
+        if: failure()
+        run: |
+          echo "❌ Scraping failed!"
+          # Add your notification logic here
+
+
+  # ==================== CLEANUP JOB ====================
+  
+  cleanup:
+    runs-on: ubuntu-latest
+    needs: scrape
+    if: always()
+    
+    steps:
+      - name: 🧹 Cleanup summary
+        run: |
+          echo "=============================================="
+          echo "🧹 WORKFLOW COMPLETE"
+          echo "=============================================="
+          echo "Job status: ${{ needs.scrape.result }}"
+          echo "Run number: ${{ github.run_number }}"
+          echo "Timestamp: $(date +'%Y-%m-%d %H:%M:%S UTC')"
