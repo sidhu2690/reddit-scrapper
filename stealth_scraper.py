@@ -6,7 +6,6 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 import pandas as pd
 from playwright.async_api import async_playwright
-from playwright_stealth import stealth_async
 import nest_asyncio
 nest_asyncio.apply()
 
@@ -47,7 +46,6 @@ class StealthScraper:
         if self.debug_mode:
             os.makedirs(self.debug_dir, exist_ok=True)
         
-        # Realistic user agents (latest Chrome versions)
         self.user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -55,7 +53,6 @@ class StealthScraper:
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
         ]
         
-        # Realistic screen resolutions
         self.viewports = [
             {"width": 1920, "height": 1080},
             {"width": 1366, "height": 768},
@@ -64,8 +61,6 @@ class StealthScraper:
             {"width": 1280, "height": 720},
         ]
 
-    # ==================== STEALTH JAVASCRIPT PATCHES ====================
-    
     def _get_stealth_scripts(self) -> list:
         """Return list of stealth JS patches to inject"""
         
@@ -120,37 +115,24 @@ class StealthScraper:
         
         # 3. Fix permissions API
         scripts.append("""
-            const originalQuery = window.navigator.permissions.query;
-            window.navigator.permissions.query = (parameters) => (
-                parameters.name === 'notifications' ?
-                    Promise.resolve({ state: Notification.permission }) :
-                    originalQuery(parameters)
-            );
+            if (navigator.permissions) {
+                const originalQuery = navigator.permissions.query;
+                navigator.permissions.query = (parameters) => (
+                    parameters.name === 'notifications' ?
+                        Promise.resolve({ state: Notification.permission }) :
+                        originalQuery(parameters)
+                );
+            }
         """)
         
-        # 4. Fix plugins array (make it look like real Chrome)
+        # 4. Fix plugins array
         scripts.append("""
             Object.defineProperty(navigator, 'plugins', {
                 get: () => {
                     const plugins = [
-                        {
-                            name: 'Chrome PDF Plugin',
-                            description: 'Portable Document Format',
-                            filename: 'internal-pdf-viewer',
-                            length: 1
-                        },
-                        {
-                            name: 'Chrome PDF Viewer',
-                            description: '',
-                            filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai',
-                            length: 1
-                        },
-                        {
-                            name: 'Native Client',
-                            description: '',
-                            filename: 'internal-nacl-plugin',
-                            length: 2
-                        }
+                        { name: 'Chrome PDF Plugin', description: 'Portable Document Format', filename: 'internal-pdf-viewer', length: 1 },
+                        { name: 'Chrome PDF Viewer', description: '', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', length: 1 },
+                        { name: 'Native Client', description: '', filename: 'internal-nacl-plugin', length: 2 }
                     ];
                     plugins.item = (index) => plugins[index] || null;
                     plugins.namedItem = (name) => plugins.find(p => p.name === name) || null;
@@ -174,7 +156,7 @@ class StealthScraper:
             });
         """)
         
-        # 7. Fix hardwareConcurrency (realistic CPU cores)
+        # 7. Fix hardwareConcurrency
         scripts.append("""
             Object.defineProperty(navigator, 'hardwareConcurrency', {
                 get: () => 8
@@ -193,17 +175,8 @@ class StealthScraper:
             const getParameterProxyHandler = {
                 apply: function(target, ctx, args) {
                     const param = args[0];
-                    const gl = ctx;
-                    
-                    // UNMASKED_VENDOR_WEBGL
-                    if (param === 37445) {
-                        return 'Google Inc. (NVIDIA)';
-                    }
-                    // UNMASKED_RENDERER_WEBGL
-                    if (param === 37446) {
-                        return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1080 Direct3D11 vs_5_0 ps_5_0, D3D11)';
-                    }
-                    
+                    if (param === 37445) return 'Google Inc. (NVIDIA)';
+                    if (param === 37446) return 'ANGLE (NVIDIA, NVIDIA GeForce GTX 1080 Direct3D11 vs_5_0 ps_5_0, D3D11)';
                     return Reflect.apply(target, ctx, args);
                 }
             };
@@ -212,14 +185,8 @@ class StealthScraper:
                 const canvas = document.createElement('canvas');
                 const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
                 if (gl) {
-                    const originalGetParameter = gl.getParameter.bind(gl);
-                    gl.__proto__.getParameter = new Proxy(originalGetParameter, getParameterProxyHandler);
-                }
-                
-                const gl2 = canvas.getContext('webgl2');
-                if (gl2) {
-                    const originalGetParameter2 = gl2.getParameter.bind(gl2);
-                    gl2.__proto__.getParameter = new Proxy(originalGetParameter2, getParameterProxyHandler);
+                    const orig = gl.getParameter.bind(gl);
+                    gl.__proto__.getParameter = new Proxy(orig, getParameterProxyHandler);
                 }
             } catch(e) {}
         """)
@@ -238,89 +205,39 @@ class StealthScraper:
         
         # 11. Hide automation indicators
         scripts.append("""
-            // Remove Playwright/Puppeteer artifacts
             delete window.__playwright;
             delete window.__puppeteer_evaluation_script__;
             delete window.__selenium_evaluate;
             delete window.__webdriver_evaluate;
             delete window.__driver_evaluate;
             delete window.__webdriver_script_function;
-            delete window.__webdriver_script_func;
-            delete window.__webdriver_script_fn;
             delete window.__fxdriver_evaluate;
-            delete window.__driver_unwrapped;
-            delete window.__webdriver_unwrapped;
-            delete window.__fxdriver_unwrapped;
-            delete window.__selenium_unwrapped;
             delete window._Selenium_IDE_Recorder;
             delete window._selenium;
             delete window.calledSelenium;
             delete document.__webdriver_script_fn;
-            delete document.$chrome_asyncScriptInfo;
             delete document.$cdc_asdjflasutopfhvcZLmcfl_;
-        """)
-        
-        # 12. Fix iframe contentWindow
-        scripts.append("""
-            try {
-                const iframe = document.createElement('iframe');
-                iframe.style.display = 'none';
-                document.body.appendChild(iframe);
-                const iframeWindow = iframe.contentWindow;
-                if (iframeWindow) {
-                    Object.defineProperty(iframeWindow.navigator, 'webdriver', {
-                        get: () => undefined
-                    });
-                }
-                document.body.removeChild(iframe);
-            } catch(e) {}
-        """)
-        
-        # 13. Fix toString detection
-        scripts.append("""
-            // Make functions look native
-            const nativeToString = Function.prototype.toString;
-            const spoofedFunctions = new WeakSet();
-            
-            Function.prototype.toString = function() {
-                if (spoofedFunctions.has(this)) {
-                    return 'function ' + this.name + '() { [native code] }';
-                }
-                return nativeToString.call(this);
-            };
         """)
         
         return scripts
 
-    # ==================== HUMAN-LIKE BEHAVIOR ====================
-    
     async def _human_delay(self, min_ms: int = 100, max_ms: int = 500):
-        """Random delay with gaussian distribution (more human-like)"""
-        import random
+        """Random delay with gaussian distribution"""
         mean = (min_ms + max_ms) / 2
         std = (max_ms - min_ms) / 4
         delay = max(min_ms, min(max_ms, random.gauss(mean, std)))
         await asyncio.sleep(delay / 1000)
 
     async def _human_mouse_move(self, page, x: int, y: int):
-        """Move mouse in a human-like curved path"""
+        """Move mouse in a human-like path"""
         try:
-            current = await page.evaluate('() => ({x: 0, y: 0})')
-            start_x = current.get('x', random.randint(0, 500))
-            start_y = current.get('y', random.randint(0, 500))
-            
-            # Generate bezier-like curve points
             steps = random.randint(10, 25)
+            start_x, start_y = random.randint(0, 500), random.randint(0, 500)
             
             for i in range(steps + 1):
                 t = i / steps
-                # Add some randomness to the path
-                noise_x = random.randint(-5, 5)
-                noise_y = random.randint(-5, 5)
-                
-                curr_x = int(start_x + (x - start_x) * t + noise_x)
-                curr_y = int(start_y + (y - start_y) * t + noise_y)
-                
+                curr_x = int(start_x + (x - start_x) * t + random.randint(-5, 5))
+                curr_y = int(start_y + (y - start_y) * t + random.randint(-5, 5))
                 await page.mouse.move(curr_x, curr_y)
                 await asyncio.sleep(random.uniform(0.01, 0.03))
         except:
@@ -329,35 +246,13 @@ class StealthScraper:
     async def _human_scroll(self, page):
         """Scroll page in a human-like manner"""
         try:
-            # Random scroll amount
-            scroll_amount = random.randint(200, 600)
-            scroll_steps = random.randint(3, 8)
-            
-            for _ in range(scroll_steps):
-                direction = random.choice([1, 1, 1, -1])  # 75% down, 25% up
-                amount = scroll_amount * direction // scroll_steps
-                
+            for _ in range(random.randint(3, 8)):
+                direction = random.choice([1, 1, 1, -1])
+                amount = random.randint(100, 300) * direction
                 await page.evaluate(f'window.scrollBy(0, {amount})')
                 await asyncio.sleep(random.uniform(0.1, 0.3))
-            
-            # Scroll back to top sometimes
-            if random.random() < 0.3:
-                await page.evaluate('window.scrollTo(0, 0)')
         except:
             pass
-
-    async def _human_random_clicks(self, page):
-        """Perform random clicks on non-interactive areas"""
-        try:
-            if random.random() < 0.3:  # 30% chance
-                x = random.randint(100, 800)
-                y = random.randint(100, 400)
-                await self._human_mouse_move(page, x, y)
-                await self._human_delay(50, 150)
-        except:
-            pass
-
-    # ==================== BROWSER SETUP ====================
 
     async def _setup_browser(self, playwright):
         """Setup browser with stealth options"""
@@ -369,18 +264,11 @@ class StealthScraper:
                 '--disable-blink-features=AutomationControlled',
                 '--disable-features=IsolateOrigins,site-per-process',
                 '--disable-infobars',
-                '--disable-background-timer-throttling',
-                '--disable-backgrounding-occluded-windows',
-                '--disable-renderer-backgrounding',
                 '--window-size=1920,1080',
                 '--start-maximized',
                 '--disable-extensions',
                 '--no-first-run',
                 '--no-default-browser-check',
-                '--disable-popup-blocking',
-                '--ignore-certificate-errors',
-                '--disable-web-security',
-                '--allow-running-insecure-content',
             ]
         )
         print("  ✓ Stealth browser launched")
@@ -396,7 +284,7 @@ class StealthScraper:
             user_agent=user_agent,
             locale='en-US',
             timezone_id='America/New_York',
-            geolocation={'latitude': 40.7128, 'longitude': -74.0060},  # NYC
+            geolocation={'latitude': 40.7128, 'longitude': -74.0060},
             permissions=['geolocation'],
             color_scheme='light',
             device_scale_factor=1,
@@ -406,11 +294,9 @@ class StealthScraper:
             bypass_csp=True,
             ignore_https_errors=True,
             extra_http_headers={
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate, br',
-                'Cache-Control': 'no-cache',
-                'Pragma': 'no-cache',
                 'Sec-Ch-Ua': '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
                 'Sec-Ch-Ua-Mobile': '?0',
                 'Sec-Ch-Ua-Platform': '"Windows"',
@@ -425,12 +311,9 @@ class StealthScraper:
         return context
 
     async def _apply_stealth_to_page(self, page):
-        """Apply all stealth patches to a page"""
+        """Apply all stealth patches to a page (NO EXTERNAL LIBRARY)"""
         
-        # 1. Apply playwright-stealth
-        await stealth_async(page)
-        
-        # 2. Apply custom stealth scripts BEFORE page loads anything
+        # Apply custom stealth scripts
         stealth_scripts = self._get_stealth_scripts()
         
         for script in stealth_scripts:
@@ -438,8 +321,6 @@ class StealthScraper:
         
         print("  ✓ Stealth patches applied")
         return page
-
-    # ==================== IP HELPERS ====================
 
     async def _get_ip_location(self) -> str:
         """Get local IP and location info"""
@@ -528,15 +409,13 @@ class StealthScraper:
         invalid = ['N/A', 'Error', 'CAPTCHA', 'Blocked', '', 'No API Key', None]
         return selling not in invalid and mrp not in invalid
 
-    # ==================== MAIN SCRAPING LOGIC ====================
-
     async def run(self, input_csv: str) -> pd.DataFrame:
         df_input = pd.read_csv(input_csv)
         products = []
         
         print(f"\n🔑 Loaded {len(self.api_keys)} API keys")
         print(f"🇺🇸 US-Only Mode: {'ENABLED' if self.us_only else 'DISABLED'}")
-        print(f"🥷 Stealth Mode: ENABLED")
+        print(f"🥷 Stealth Mode: ENABLED (custom implementation)")
         
         local_ip = await self._get_ip_location()
         is_us = await self._is_local_ip_us()
@@ -578,9 +457,8 @@ class StealthScraper:
                 print(f"         MRP(A)={product.amazon_mrp}, SP(A)={product.amazon_selling_price}, "
                       f"MRP(E)={product.ebazaar_mrp}, SP(E)={product.ebazaar_selling_price}")
                 
-                # Longer delay between products
                 if idx < total - 1:
-                    delay = random.uniform(5, 10)  # Increased delay for stealth
+                    delay = random.uniform(5, 10)
                     print(f"  ⏳ Waiting {delay:.1f}s before next product...")
                     await asyncio.sleep(delay)
             
@@ -593,7 +471,6 @@ class StealthScraper:
         
         is_local_us = await self._is_local_ip_us()
         
-        # If US-only mode AND local IP is not US, skip local methods
         if self.us_only and not is_local_us:
             print("  → Skipping local methods (non-US IP)")
             print("  → Method C: ScraperAPI (US proxy)...")
@@ -602,7 +479,6 @@ class StealthScraper:
                 return mrp, selling, "C", ip_loc
             return mrp, selling, "X", "N/A"
         
-        # Method B: Stealth Playwright (primary method now)
         print("  → Method B: Stealth Playwright...")
         mrp, selling = await self._scrape_amazon_stealth_playwright(url, idx)
         if self._is_valid_price(mrp, selling):
@@ -610,7 +486,6 @@ class StealthScraper:
             print(f"  ✓ Stealth Playwright success!")
             return mrp, selling, "B", ip_loc
         
-        # Method C: ScraperAPI (fallback)
         print("  → Method C: ScraperAPI (fallback)...")
         mrp, selling, ip_loc = await self._scrape_amazon_api(url, idx)
         if self._is_valid_price(mrp, selling):
@@ -622,49 +497,35 @@ class StealthScraper:
         """Scrape Amazon with full stealth measures"""
         context = None
         try:
-            # Create stealth context
             context = await self._create_stealth_context()
             page = await context.new_page()
-            
-            # Apply stealth patches
             await self._apply_stealth_to_page(page)
             
-            # Pre-visit warm-up (optional - visit homepage first)
-            if random.random() < 0.3:  # 30% chance
-                print("  → Warming up session with homepage visit...")
+            # Optional warm-up
+            if random.random() < 0.3:
+                print("  → Warming up session...")
                 await page.goto('https://www.amazon.com', wait_until='domcontentloaded', timeout=30000)
                 await self._human_delay(1000, 2000)
                 await self._human_scroll(page)
-                await self._human_delay(500, 1000)
             
-            # Navigate to product page
             print(f"  → Navigating to product page...")
             await page.goto(url, wait_until='domcontentloaded', timeout=60000)
             
             # Human-like behavior
             await self._human_delay(1500, 3000)
             await self._human_mouse_move(page, random.randint(400, 800), random.randint(200, 400))
-            await self._human_delay(500, 1000)
             await self._human_scroll(page)
             await self._human_delay(500, 1500)
-            await self._human_random_clicks(page)
             
-            # Check for CAPTCHA
             html = await page.content()
             
             if self.debug_mode:
                 await page.screenshot(path=f"{self.debug_dir}/amazon_stealth_{idx}.png", full_page=True)
             
-            if 'captcha' in html.lower() or 'robot' in html.lower() or 'not a robot' in html.lower():
+            if 'captcha' in html.lower() or 'robot' in html.lower():
                 print("  ⚠ Stealth Playwright: CAPTCHA detected")
                 return "CAPTCHA", "CAPTCHA"
             
-            # Verify stealth is working (optional debug)
-            if self.debug_mode:
-                webdriver_check = await page.evaluate('() => navigator.webdriver')
-                print(f"  [DEBUG] navigator.webdriver = {webdriver_check}")
-            
-            # Parse prices
             return self._parse_amazon_prices(html)
             
         except Exception as e:
@@ -841,10 +702,8 @@ class StealthScraper:
                 await context.close()
 
 
-# ==================== BOT DETECTION TEST ====================
-
 async def test_stealth():
-    """Test stealth effectiveness against bot detection sites"""
+    """Test stealth effectiveness"""
     
     print("\n" + "=" * 60)
     print("🔬 STEALTH DETECTION TEST")
@@ -858,64 +717,35 @@ async def test_stealth():
         page = await context.new_page()
         await scraper._apply_stealth_to_page(page)
         
-        # Test 1: Check navigator.webdriver
+        # Navigate to trigger init scripts
+        await page.goto('about:blank')
+        
         print("\n[Test 1] navigator.webdriver")
         webdriver = await page.evaluate('() => navigator.webdriver')
         print(f"  Result: {webdriver}")
-        print(f"  {'✓ PASS' if webdriver in [None, False, 'undefined'] else '✗ FAIL'}")
+        print(f"  {'✓ PASS' if webdriver in [None, False, 'undefined'] or webdriver is None else '✗ FAIL'}")
         
-        # Test 2: Check chrome object
         print("\n[Test 2] window.chrome")
         chrome = await page.evaluate('() => !!window.chrome')
         print(f"  Result: {chrome}")
         print(f"  {'✓ PASS' if chrome else '✗ FAIL'}")
         
-        # Test 3: Check plugins
         print("\n[Test 3] navigator.plugins")
         plugins_len = await page.evaluate('() => navigator.plugins.length')
         print(f"  Result: {plugins_len} plugins")
         print(f"  {'✓ PASS' if plugins_len > 0 else '✗ FAIL'}")
         
-        # Test 4: Check languages
         print("\n[Test 4] navigator.languages")
         languages = await page.evaluate('() => navigator.languages')
         print(f"  Result: {languages}")
         print(f"  {'✓ PASS' if languages and len(languages) > 0 else '✗ FAIL'}")
         
-        # Test 5: Check permissions
-        print("\n[Test 5] Permissions API")
-        try:
-            perm = await page.evaluate('''
-                async () => {
-                    const result = await navigator.permissions.query({name: 'notifications'});
-                    return result.state;
-                }
-            ''')
-            print(f"  Result: {perm}")
-            print(f"  ✓ PASS")
-        except Exception as e:
-            print(f"  Error: {e}")
-        
-        # Test 6: Visit bot detection site
-        print("\n[Test 6] Bot Detection Site Test")
-        print("  → Visiting bot.sannysoft.com...")
-        
+        print("\n[Test 5] Bot Detection Site")
         try:
             await page.goto('https://bot.sannysoft.com/', wait_until='networkidle', timeout=30000)
             await asyncio.sleep(3)
             await page.screenshot(path='debug_screenshots/bot_detection_test.png', full_page=True)
-            print("  ✓ Screenshot saved to debug_screenshots/bot_detection_test.png")
-            print("  → Check the screenshot to see detection results")
-        except Exception as e:
-            print(f"  Error: {str(e)[:50]}")
-        
-        # Test 7: Visit another detection site
-        print("\n[Test 7] Fingerprint.js Test")
-        try:
-            await page.goto('https://abrahamjuliot.github.io/creepjs/', wait_until='networkidle', timeout=30000)
-            await asyncio.sleep(5)
-            await page.screenshot(path='debug_screenshots/creepjs_test.png', full_page=True)
-            print("  ✓ Screenshot saved to debug_screenshots/creepjs_test.png")
+            print("  ✓ Screenshot saved: debug_screenshots/bot_detection_test.png")
         except Exception as e:
             print(f"  Error: {str(e)[:50]}")
         
@@ -927,14 +757,10 @@ async def test_stealth():
     print("=" * 60)
 
 
-# ==================== MAIN ====================
-
 def main():
     print("=" * 60)
     print("🥷 STEALTH Price Scraper Started")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("=" * 60)
-    print("Method Legend: B=Stealth Playwright, C=API, X=Failed")
     print("=" * 60)
     
     scraper = StealthScraper(debug_mode=True, us_only=True)
@@ -955,11 +781,6 @@ def main():
         print(f"    C (API/US):     {method_counts.get('C', 0)}")
         print(f"    X (Failed):     {method_counts.get('X', 0)}")
         
-        ip_counts = df_output['amazon_ip_location'].value_counts()
-        print(f"\n  IP Locations:")
-        for ip, count in ip_counts.items():
-            print(f"    {ip}: {count}")
-        
         print(f"\n  Amazon success:  {amazon_ok}/{len(df_output)}")
         print(f"  eBazaar success: {ebazaar_ok}/{len(df_output)}")
         print("=" * 60)
@@ -975,8 +796,6 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) > 1 and sys.argv[1] == '--test':
-        # Run stealth detection test
         asyncio.run(test_stealth())
     else:
-        # Run normal scraper
         main()
